@@ -134,7 +134,7 @@ void solveunit(vector<double> dt, vector<double> Xref, vector<double> Vref, vect
     j["a"] = ja;
     j["u"] = ju;
     j["Xref"] = Xref;
-    ofstream out("test.out");
+    ofstream out("test2.out");
     if(out.is_open()) {
         out << j.dump(4) << endl;
         out.close();

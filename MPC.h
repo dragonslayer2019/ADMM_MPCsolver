@@ -51,6 +51,29 @@ public:
     BlockVectorComb bF;
     T rho = 1;
 
+    /**
+     * ADMM new coefficients
+     */
+    std::array<MatrixX, HorizonNum> barA;
+    std::array<MatrixB, HorizonNum> barB;
+    std::array<Eigen::Matrix<T, SizeU, SizeX>, HorizonNum> barBT;
+    std::array<VectorX, HorizonNum> barc;
+    std::array<MatrixHx, HorizonNum + 1> bEx;
+    std::array<MatrixHu, HorizonNum + 1> bEu;
+    /**
+     * LQR backward matrix
+     */
+    std::array<MatrixX, HorizonNum + 1> Q_lqr;
+    std::array<MatrixU, HorizonNum + 1> R_lqr;
+    std::array<MatrixU, HorizonNum + 1> G_lqr;
+    std::array<MatrixB, HorizonNum + 1> K_lqr;
+    std::array<MatrixX, HorizonNum + 1> Fx_lqr;
+    std::array<MatrixX, HorizonNum + 1> P_lqr;
+    std::array<VectorU, HorizonNum + 1> BTPc;
+    std::array<MatrixX, HorizonNum + 1> FTP;
+    std::array<MatrixB, HorizonNum + 1> KRT;
+    VectorX bar_x_init;
+
     MPC_ADMMSolver(
         std::array<MatrixX, HorizonNum + 1> _Q,
         std::array<MatrixU, HorizonNum + 1> _R,
@@ -67,7 +90,7 @@ public:
         int _K = 250
     ) : Q(_Q), R(_R), L(_L), W(_W), A(_A), B(_B), c(_c), x_init(_x_init), Hx(_Hx), Hu(_Hu), g(_g), K(_K) {}
 
-    void PreScaling() {
+    void PreScaling1() {
         // P_x, P_u
         std::array<MatrixX, HorizonNum + 1> Px, iPx, PxT, iPxT;
         std::array<MatrixU, HorizonNum + 1> Pu, iPu, PuT, iPuT;
@@ -81,23 +104,24 @@ public:
             iPxT[i] = PxT[i].inverse();
             iPuT[i] = PuT[i].inverse();
         }
+        bar_x_init = PxT[0] * x_init;
 
-        typedef Eigen::DiagonalMatrix<T, SizeX> DiagMatrixX;
-        typedef Eigen::DiagonalMatrix<T, SizeU> DiagMatrixU;
-        
         std::array<Eigen::Matrix<T, SizeX, SizeX>, HorizonNum + 1> LambX;
         std::array<Eigen::Matrix<T, SizeU, SizeU>, HorizonNum + 1> LambU;
-        std::array<T, SizeX + SizeU> Lamb;
-        MatrixX IA; IA.setIdentity(SizeX, SizeX);
         for(int i = 0; i <= HorizonNum; ++i) {
             // \bar{A}
-            bA.d[i] << IA, Eigen::Matrix<T, SizeX, SizeU>::Zero(SizeX, SizeU);
-            if(i < HorizonNum) bA.sd[i] << -PxT[i] * A[i] * iPxT[i], -PxT[i] * B[i] * iPuT[i];
-            
+            if (i < HorizonNum) {
+                barA[i] = PxT[i + 1] * A[i] * iPxT[i];
+            }
             // \bar{b}
-            if(i == 0) bb.v[i] = PxT[0] * x_init;
-            else bb.v[i] = PxT[i - 1] * c[i - 1];
-
+            if (i < HorizonNum) {
+                barB[i] = PxT[i + 1] * B[i] * iPuT[i];
+                barBT[i] = barB[i].transpose();
+            }
+            // \bar{c}
+            if (i < HorizonNum) {
+                barc[i] = PxT[i + 1] * c[i];
+            }
             // \bar{F}
             bF.v[i] << iPx[i] * L[i], iPu[i] *  W[i];
 
@@ -107,45 +131,59 @@ public:
 
             for(int j = 0; j < SizeYx; ++j) g[i][j].Prescaling(LambX[i].diagonal()(j));
             for(int j = SizeX; j < SizeYx + SizeYu; ++j) g[i][j].Prescaling(LambU[i].diagonal()(j - SizeX));
-            
 
-            // (x,u) = barE * barz; Calculate bE = \bar{E}
+            // (x,u) = barE * barz; w = bE * barz;
             barE.d[i] << iPxT[i], Eigen::Matrix<T, SizeX, SizeU>::Zero(SizeX, SizeU),
                       Eigen::Matrix<T, SizeU, SizeX>::Zero(SizeU, SizeX), iPuT[i];
             bE.d[i] << LambX[i] * Hx[i] * iPxT[i], Eigen::Matrix<T, SizeYx, SizeU>::Zero(SizeX, SizeU),
                       Eigen::Matrix<T, SizeYu, SizeX>::Zero(SizeU, SizeX), LambU[i] * Hu[i] * iPuT[i];
+            bET.d[i] = bE.d[i].transpose();
+            bEx[i] = LambX[i] * Hx[i] * iPxT[i];
+            bEu[i] = LambU[i] * Hu[i] * iPuT[i];
         }
     }
 
-    void ADMMPrework() {
-        Eigen::Matrix<T, SizeX + SizeU, SizeX + SizeU> I;
-        I.setIdentity(SizeX + SizeU, SizeX + SizeU);
-        for(int i = 0; i <= HorizonNum; ++i) {
-            bET.d[i] = bE.d[i].transpose();
-            bG.d[i] = rho * bET.d[i] * bE.d[i] + I;
-            biG.d[i] = bG.d[i].inverse();
+    void ADMMPrework1() {
+        Eigen::Matrix<T, SizeX, SizeX> Ix;
+        Ix.setIdentity(SizeX, SizeX);
+        Eigen::Matrix<T, SizeU, SizeU> Iu;
+        Iu.setIdentity(SizeU, SizeU);
+
+        for (int i = HorizonNum; i >= 0; --i) {
+            Q_lqr[i] = (rho * bEx[i].transpose() * bEx[i] + Ix) * 0.5;
+            R_lqr[i] = (rho * bEu[i].transpose() * bEu[i] + Iu) * 0.5;
         }
-        
-        BlockLowerBidiagonalMatrix<T, HorizonNum + 1, SizeX, SizeX + SizeU> bAiG;
-        for(int i = 0; i <= HorizonNum; ++i) {
-            bAiG.d[i] = bA.d[i] * biG.d[i];
-            if(i < HorizonNum) bAiG.sd[i] = bA.sd[i] * biG.d[i];
+        P_lqr[HorizonNum] = Q_lqr[HorizonNum];
+        K_lqr[HorizonNum] = MatrixB::Zero(SizeX, SizeU);
+        for (int i = HorizonNum - 1; i >= 0; --i) {
+            G_lqr[i] = (barBT[i] * P_lqr[i + 1] * barB[i] + R_lqr[i]).inverse();
+            K_lqr[i] = -barA[i].transpose() * P_lqr[i + 1] * barB[i] * G_lqr[i].transpose();
+            Fx_lqr[i] = barA[i] + barB[i] * K_lqr[i].transpose();
+            P_lqr[i] = Fx_lqr[i].transpose() * P_lqr[i + 1] * Fx_lqr[i] + K_lqr[i] * R_lqr[i] * K_lqr[i].transpose() + Q_lqr[i];
+            BTPc[i] = -2 * barBT[i] * P_lqr[i + 1] * barc[i];
+            FTP[i] = Fx_lqr[i].transpose() * P_lqr[i + 1];
+            KRT[i] = K_lqr[i] * R_lqr[i].transpose();
         }
-        bAiGAT.d[0] = bAiG.d[0] * bA.d[0].transpose();
-        bAiGAT.sd[0] = bAiG.sd[0] * bA.d[0].transpose();
-        for(int i = 1; i <= HorizonNum; ++i) {
-            bAiGAT.d[i] = bAiG.sd[i - 1] * bA.sd[i - 1].transpose() + bAiG.d[i] * bA.d[i].transpose();
-            if(i < HorizonNum) bAiGAT.sd[i] = bAiG.sd[i] * bA.d[i].transpose();
-        }
-        bL = bAiGAT.Cholesky();
     }
-    
-    BlockVectorComb LQR_Solver(BlockVectorComb f) {
-        BlockVectorX y, lamb;
-        BlockVectorComb iGf = biG * f;
-        y = bL.LinearSolver(bb * (-1) - bA.Multiply(iGf));
-        lamb = bL.TransposeLinearSolver(y);
-        return (biG * bA.TransposeMultiply(lamb) + iGf) * (-1);
+
+    BlockVectorComb LQR_Solver1(BlockVectorComb f) {
+        std::array<VectorU, HorizonNum + 1> r_lqr;
+        std::array<VectorX, HorizonNum + 1> E_lqr;
+        std::array<VectorX, HorizonNum + 1> Fr_lqr;
+        E_lqr[HorizonNum] = f.v[HorizonNum].block(0, 0, SizeX, 1);
+        for (int i = HorizonNum - 1; i >= 0; --i) {
+            r_lqr[i] = 0.5 * G_lqr[i] * (BTPc[i] - barBT[i] * E_lqr[i + 1] - f.v[i].block(SizeX, 0, SizeU, 1));
+            Fr_lqr[i] = barB[i] * r_lqr[i];
+            E_lqr[i] = 2 * FTP[i] * (Fr_lqr[i] + barc[i]) + Fx_lqr[i].transpose() * E_lqr[i + 1] + 2 * KRT[i] * r_lqr[i] + f.v[i].block(0, 0, SizeX, 1) + K_lqr[i] * f.v[i].block(SizeX, 0, SizeU, 1);
+        }
+        BlockVectorComb res;
+        res.v[0].block(0, 0, SizeX, 1) = bar_x_init;
+        res.v[HorizonNum].block(SizeX, 0, SizeU, 1) = -0.5 * R_lqr[HorizonNum].inverse() * f.v[HorizonNum].block(SizeX, 0, SizeU, 1);
+        for (int i = 0; i < HorizonNum; ++i) {
+            res.v[i + 1].block(0, 0, SizeX, 1) = Fx_lqr[i] * res.v[i].block(0, 0, SizeX, 1) + Fr_lqr[i] + barc[i];
+            res.v[i].block(SizeX, 0, SizeU, 1) = K_lqr[i].transpose() * res.v[i].block(0, 0, SizeX, 1) + r_lqr[i];
+        }
+        return res;
     }
     
     BlockVectorComb G_Solver(BlockVectorComb barz, BlockVectorComb nu, T rho) {
@@ -168,7 +206,9 @@ public:
             res1 += 0.5 * x.transpose() * (Q[i] * x) + L[i].dot(x);
             VectorU v = R[i] * u;
             res1 += 0.5 * u.transpose() * v + W[i].dot(u);
-            // cout << u.transpose() << ' ' << 0.5 * u.transpose() * v + W[i].dot(u) << ' ' << 0.5 * x.transpose() * (Q[i] * x) + L[i].dot(x) << endl;
+            // check this line, not equal to the real cost
+            // res1 += 0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1);
+            //cout<< i<< ' '<< u.transpose() << ' ' << 0.5 * u.transpose() * v + W[i].dot(u) << ' ' << 0.5 * x.transpose() * (Q[i] * x) <<' '<< L[i].dot(x)<<' '<<0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1)<<' '<<x[0]<<' '<<x[1]<<' '<<x[2]<<endl;
         }
         for(int j = 0; j < SizeX + SizeU; ++j) {
             std::array<T, HorizonNum + 1> d;
@@ -193,11 +233,11 @@ public:
         res = barz;
         T min_cost = inf;
         while(k <= K) {
-            barz = LQR_Solver(bF - (bET * (w + nu)) * (rho));
+            barz = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
             w = G_Solver(barz, nu, rho);
             nu = nu + w - bE * barz;
             k++;
-            if(k > 100 && !(k % 10)) {
+            if(!(k % 10)) {
                 T cost = CalculateCost(barz);
                 if(cost < min_cost) {
                     res = barz;
@@ -211,8 +251,8 @@ public:
     }
 
     BlockVector<T, HorizonNum + 1, SizeX + SizeU> solve() {
-        PreScaling();
-        ADMMPrework();
+        PreScaling1();
+        ADMMPrework1();
         BlockVector<T, HorizonNum + 1, SizeX + SizeU> res = ADMMIteration();
         return res;
     }
