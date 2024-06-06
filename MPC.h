@@ -243,32 +243,6 @@ public:
             w = G_Solver(barz, nu_minus, rho);
             lambda = lambda + (w - bE * barz) * (step / gamma);
             nu = nu * (1 - gamma) + lambda * gamma;
-
-            // line search
-            /*barz_nu = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
-            w_nu = G_Solver(barz, nu, rho);
-            T cost_minus = CalculateCost(barz) + nu_minus * (w - bE * barz);
-            T cost_nu = CalculateCost(barz_nu) + nu * (w_nu - bE * barz_nu);
-            int cnt = 1;
-            double rho = 0.5;
-            while (cnt <= 5 && k > 1) {
-                if (cost_nu < cost_minus + (w - bE * barz) * (nu - nu_minus) + (nu - nu_minus) * (nu - nu_minus) / (2 * step)) break;
-                else {
-                    step *= rho;
-                    lambda = lambda + (w - bE * barz) * (step / gamma);
-                    nu = nu * (1 - gamma) + lambda * gamma;
-
-                    barz_nu = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
-                    w_nu = G_Solver(barz, nu, rho);
-                    cost_minus = CalculateCost(barz) + nu_minus * (w - bE * barz);
-                    cost_nu = CalculateCost(barz_nu) + nu * (w_nu - bE * barz_nu);
-                }
-                cnt++;
-            }*/
-            //cout<<"step: "<<cnt<<' '<<step<<endl;
-            //nu_minus.print("nu_minus");
-            //lambda.print("lambda");
-            //nu.print("nu");
             k++;
             T cost = CalculateCost(barz);
             cvec.push_back(cost);
