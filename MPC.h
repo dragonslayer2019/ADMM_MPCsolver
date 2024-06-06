@@ -3,6 +3,7 @@
 #include "BlockMatrix.h"
 #include "FunctionG.h"
 #include <Eigen/Dense>
+#include "json.hpp"
 
 template <typename T, int HorizonNum, int SizeX, int SizeU, int SizeYx, int SizeYu>
 class MPC_ADMMSolver{
@@ -206,7 +207,7 @@ public:
             res1 += 0.5 * x.transpose() * (Q[i] * x) + L[i].dot(x);
             VectorU v = R[i] * u;
             res1 += 0.5 * u.transpose() * v + W[i].dot(u);
-            // check this line, not equal to the real cost
+            // check this line, not equal to the real cost, don't effect result
             // res1 += 0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1);
             //cout<< i<< ' '<< u.transpose() << ' ' << 0.5 * u.transpose() * v + W[i].dot(u) << ' ' << 0.5 * x.transpose() * (Q[i] * x) <<' '<< L[i].dot(x)<<' '<<0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1)<<' '<<x[0]<<' '<<x[1]<<' '<<x[2]<<endl;
         }
@@ -232,13 +233,15 @@ public:
         barz.setZero(); w.setZero(); nu.setZero(); 
         res = barz;
         T min_cost = inf;
+        std::vector<T> cvec;
         while(k <= K) {
             barz = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
             w = G_Solver(barz, nu, rho);
             nu = nu + w - bE * barz;
             k++;
+            T cost = CalculateCost(barz);
+            cvec.push_back(cost);
             if(!(k % 10)) {
-                T cost = CalculateCost(barz);
                 if(cost < min_cost) {
                     res = barz;
                     min_cost = cost;
@@ -246,6 +249,20 @@ public:
                 cout << "Episodes: " << k << ' ' << cost << endl;
             }
         }
+
+        using json = nlohmann::json;
+        json j;
+        json jcost = json::array();
+        for(int i = 0; i < K; ++i) {
+            jcost.push_back(cvec[i]);
+        }
+        j["cost"] = jcost;
+        ofstream out("testori.out");
+        if(out.is_open()) {
+            out << j.dump(4) << endl;
+            out.close();
+        }
+
         cout << "Final Cost: " << min_cost << endl;
         return barE * res;
     }
