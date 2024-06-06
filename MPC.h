@@ -226,18 +226,49 @@ public:
         return res1 + res2 + res3;
     }
 
-    BlockVectorComb ADMMIteration() {
+    BlockVectorComb ADMMIterationQuick() {
         int k = 1; // iteration num
-        BlockVector<T, HorizonNum + 1, SizeX + SizeU> barz, res;
-        BlockVector<T, HorizonNum + 1, SizeYx + SizeYu> w, nu;
-        barz.setZero(); w.setZero(); nu.setZero(); 
+        BlockVector<T, HorizonNum + 1, SizeX + SizeU> barz, res, barz_nu;
+        BlockVector<T, HorizonNum + 1, SizeYx + SizeYu> w, nu, nu_minus, lambda, w_nu;
+        barz.setZero(); w.setZero(); nu.setZero(); lambda.setZero();
         res = barz;
         T min_cost = inf;
         std::vector<T> cvec;
         while(k <= K) {
-            barz = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
-            w = G_Solver(barz, nu, rho);
-            nu = nu + w - bE * barz;
+            double step = 0.1;
+            double gamma = 2. / (k + 1);
+            //cout<<"test: "<<step / gamma<<' '<<step<<' '<<gamma<<endl;
+            nu_minus = nu * (1 - gamma) + lambda * gamma;
+            barz = LQR_Solver1(bF - (bET * (w + nu_minus)) * (rho));
+            w = G_Solver(barz, nu_minus, rho);
+            lambda = lambda + (w - bE * barz) * (step / gamma);
+            nu = nu * (1 - gamma) + lambda * gamma;
+
+            // line search
+            /*barz_nu = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
+            w_nu = G_Solver(barz, nu, rho);
+            T cost_minus = CalculateCost(barz) + nu_minus * (w - bE * barz);
+            T cost_nu = CalculateCost(barz_nu) + nu * (w_nu - bE * barz_nu);
+            int cnt = 1;
+            double rho = 0.5;
+            while (cnt <= 5 && k > 1) {
+                if (cost_nu < cost_minus + (w - bE * barz) * (nu - nu_minus) + (nu - nu_minus) * (nu - nu_minus) / (2 * step)) break;
+                else {
+                    step *= rho;
+                    lambda = lambda + (w - bE * barz) * (step / gamma);
+                    nu = nu * (1 - gamma) + lambda * gamma;
+
+                    barz_nu = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
+                    w_nu = G_Solver(barz, nu, rho);
+                    cost_minus = CalculateCost(barz) + nu_minus * (w - bE * barz);
+                    cost_nu = CalculateCost(barz_nu) + nu * (w_nu - bE * barz_nu);
+                }
+                cnt++;
+            }*/
+            //cout<<"step: "<<cnt<<' '<<step<<endl;
+            //nu_minus.print("nu_minus");
+            //lambda.print("lambda");
+            //nu.print("nu");
             k++;
             T cost = CalculateCost(barz);
             cvec.push_back(cost);
@@ -257,7 +288,7 @@ public:
             jcost.push_back(cvec[i]);
         }
         j["cost"] = jcost;
-        ofstream out("testori.out");
+        ofstream out("testacc.out");
         if(out.is_open()) {
             out << j.dump(4) << endl;
             out.close();
@@ -270,7 +301,7 @@ public:
     BlockVector<T, HorizonNum + 1, SizeX + SizeU> solve() {
         PreScaling1();
         ADMMPrework1();
-        BlockVector<T, HorizonNum + 1, SizeX + SizeU> res = ADMMIteration();
+        BlockVector<T, HorizonNum + 1, SizeX + SizeU> res = ADMMIterationQuick();
         return res;
     }
 
