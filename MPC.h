@@ -4,6 +4,7 @@
 #include "FunctionG.h"
 #include <Eigen/Dense>
 #include "json.hpp"
+#include "cmath"
 
 template <typename T, int HorizonNum, int SizeX, int SizeU, int SizeYx, int SizeYu>
 class MPC_ADMMSolver{
@@ -18,6 +19,7 @@ private:
     typedef BlockVector<T, HorizonNum + 1, SizeX + SizeU> BlockVectorComb;
     typedef BlockVector<T, HorizonNum + 1, SizeX> BlockVectorX;
     typedef BlockVector<T, HorizonNum + 1, SizeU> BlockVectorU;
+    typedef BlockVector<T, HorizonNum + 1, SizeYx+SizeYu> BlockVectorW;
     const double inf = 1e6;
 
 public:
@@ -34,7 +36,8 @@ public:
     VectorX x_init;
     std::array<MatrixHx, HorizonNum + 1> Hx;
     std::array<MatrixHu, HorizonNum + 1> Hu;
-    std::array<std::array<FunctionG<T>, SizeX + SizeU>, HorizonNum + 1> g;
+    std::array<Eigen::Matrix<T, SizeYx - SizeX, 1>, HorizonNum + 1> new_center;
+    std::array<std::array<FunctionG<T>, SizeYx + SizeYu>, HorizonNum + 1> g;
     int K;
     T costweight;
 
@@ -74,7 +77,6 @@ public:
     std::array<MatrixX, HorizonNum + 1> FTP;
     std::array<MatrixB, HorizonNum + 1> KRT;
     VectorX bar_x_init;
-
     MPC_ADMMSolver(
         std::array<MatrixX, HorizonNum + 1> _Q,
         std::array<MatrixU, HorizonNum + 1> _R,
@@ -86,10 +88,11 @@ public:
         VectorX _x_init,
         std::array<MatrixHx, HorizonNum + 1> _Hx,
         std::array<MatrixHu, HorizonNum + 1> _Hu,
-        std::array<std::array<FunctionG<T>, SizeX + SizeU>, HorizonNum + 1> _g,
+        std::array<Eigen::Matrix<T, SizeYx - SizeX, 1>, HorizonNum + 1> _new_center,
+        std::array<std::array<FunctionG<T>, SizeYx + SizeYu>, HorizonNum + 1> _g,
         T _costweight,
         int _K = 250
-    ) : Q(_Q), R(_R), L(_L), W(_W), A(_A), B(_B), c(_c), x_init(_x_init), Hx(_Hx), Hu(_Hu), g(_g), K(_K) {}
+    ) : Q(_Q), R(_R), L(_L), W(_W), A(_A), B(_B), c(_c), x_init(_x_init), Hx(_Hx), Hu(_Hu), new_center(_new_center), g(_g), costweight(_costweight), K(_K) {}
 
     void PreScaling1() {
         // P_x, P_u
@@ -107,8 +110,9 @@ public:
         }
         bar_x_init = PxT[0] * x_init;
 
-        std::array<Eigen::Matrix<T, SizeX, SizeX>, HorizonNum + 1> LambX;
-        std::array<Eigen::Matrix<T, SizeU, SizeU>, HorizonNum + 1> LambU;
+        std::array<Eigen::Matrix<T, SizeYx, SizeYx>, HorizonNum + 1> LambX;
+        std::array<Eigen::Matrix<T, SizeYu, SizeYu>, HorizonNum + 1> LambU;
+        MatrixX LambXi;
         for(int i = 0; i <= HorizonNum; ++i) {
             // \bar{A}
             if (i < HorizonNum) {
@@ -127,16 +131,18 @@ public:
             bF.v[i] << iPx[i] * L[i], iPu[i] *  W[i];
 
             // \Lambda_x, \Lambda_u
-            LambX[i] = (Hx[i] * iPxT[i]).rowwise().norm().asDiagonal().inverse();
+            LambXi = (Hx[i].block(0, 0, SizeX, SizeX) * iPxT[i]).rowwise().norm().asDiagonal().inverse();
+            LambX[i] << LambXi, Eigen::Matrix<T, SizeX, SizeYx-SizeX>::Zero(SizeX, SizeYx-SizeX),
+                        Eigen::Matrix<T, SizeYx-SizeX, SizeX>::Zero(SizeYx-SizeX, SizeX), Eigen::Matrix<T, SizeYx-SizeX, SizeYx-SizeX>::Identity(SizeYx-SizeX, SizeYx-SizeX);
             LambU[i] = (Hu[i] * iPuT[i]).rowwise().norm().asDiagonal().inverse();
 
             for(int j = 0; j < SizeYx; ++j) g[i][j].Prescaling(LambX[i].diagonal()(j));
-            for(int j = SizeX; j < SizeYx + SizeYu; ++j) g[i][j].Prescaling(LambU[i].diagonal()(j - SizeX));
+            for(int j = SizeYx; j < SizeYx + SizeYu; ++j) g[i][j].Prescaling(LambU[i].diagonal()(j - SizeYx));
 
             // (x,u) = barE * barz; w = bE * barz;
             barE.d[i] << iPxT[i], Eigen::Matrix<T, SizeX, SizeU>::Zero(SizeX, SizeU),
                       Eigen::Matrix<T, SizeU, SizeX>::Zero(SizeU, SizeX), iPuT[i];
-            bE.d[i] << LambX[i] * Hx[i] * iPxT[i], Eigen::Matrix<T, SizeYx, SizeU>::Zero(SizeX, SizeU),
+            bE.d[i] << LambX[i] * Hx[i] * iPxT[i], Eigen::Matrix<T, SizeYx, SizeU>::Zero(SizeYx, SizeU),
                       Eigen::Matrix<T, SizeYu, SizeX>::Zero(SizeU, SizeX), LambU[i] * Hu[i] * iPuT[i];
             bET.d[i] = bE.d[i].transpose();
             bEx[i] = LambX[i] * Hx[i] * iPxT[i];
@@ -187,11 +193,19 @@ public:
         return res;
     }
     
-    BlockVectorComb G_Solver(BlockVectorComb barz, BlockVectorComb nu, T rho) {
-        BlockVectorComb u = bE * barz - nu;
+    BlockVectorW G_Solver(BlockVectorComb barz, BlockVectorW nu, T rho) {
+        BlockVectorW u = bE * barz - nu;
         for(int i = 0; i <= HorizonNum; ++i) {
-            for(int j = 0; j < SizeX + SizeU; ++j) {
-                T ui = u.v[i](j);
+            for(int j = 0; j < SizeX; ++j) {
+                T ui = u.v[i](j); 
+                u.v[i](j) = g[i][j].Minimizer(ui, rho);
+            }
+            Eigen::Matrix<T, SizeYx - SizeX, 1> d = u.v[i].block(SizeX, 0, SizeYx - SizeX, 1);
+            T L = std::sqrt((new_center[i] - d).transpose() * (new_center[i] - d));
+            T res = g[i][4].Minimizer(L, rho);
+            u.v[i].block(SizeX, 0, SizeYx - SizeX, 1) = res / L * (d - new_center[i]) + new_center[i];
+            for (int j = SizeYx; j < SizeYx + SizeYu; j++) {
+                T ui = u.v[i](j); 
                 u.v[i](j) = g[i][j].Minimizer(ui, rho);
             }
         }
@@ -199,7 +213,8 @@ public:
     }
 
     T CalculateCost(BlockVector<T, HorizonNum + 1, SizeX + SizeU> barz) {
-        BlockVector<T, HorizonNum + 1, SizeX + SizeU> z = barE * barz, w = bE * barz;
+        BlockVector<T, HorizonNum + 1, SizeX + SizeU> z = barE * barz;
+        BlockVectorW w = bE * barz;
         T res1 = 0, res2 = 0, res3 = 0;
         for(int i = 0; i <= HorizonNum; ++i) {
             VectorX x = z.v[i].block(0, 0, SizeX, 1);
@@ -209,19 +224,23 @@ public:
             res1 += 0.5 * u.transpose() * v + W[i].dot(u);
             // check this line, not equal to the real cost, don't effect result
             // res1 += 0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1);
+
             //cout<< i<< ' '<< u.transpose() << ' ' << 0.5 * u.transpose() * v + W[i].dot(u) << ' ' << 0.5 * x.transpose() * (Q[i] * x) <<' '<< L[i].dot(x)<<' '<<0.5 * (L[i][0] * L[i][0] / 1 + L[i][1] * L[i][1] / 1)<<' '<<x[0]<<' '<<x[1]<<' '<<x[2]<<endl;
         }
-        for(int j = 0; j < SizeX + SizeU; ++j) {
+        for(int j = 0; j < SizeYx + SizeYu; ++j) {
             std::array<T, HorizonNum + 1> d;
             for(int i = 0; i <= HorizonNum; ++i) {
                 T x = w.v[i](j);
+                if (j == 4) {
+                    x = std::sqrt((new_center[i] - w.v[i].block(SizeX, 0, SizeYx - SizeX, 1)).transpose() * (new_center[i] - w.v[i].block(SizeX, 0, SizeYx - SizeX, 1)));
+                }
                 res2 += g[i][j].CostOfQuadraticPart(x);
                 d[i] = g[i][j].DistanceOfIndicatorPart(x);
             }
             for(int i = 0; i < HorizonNum; ++i) {
                 res3 += costweight * (d[i + 1] - d[i] > 0 ? d[i + 1] - d[i] : 0);
             }
-            // cout << res3 << endl;
+            //cout << j << ' '<<res2 << ' ' << res3<< endl;
         }
         return res1 + res2 + res3;
     }
@@ -235,7 +254,7 @@ public:
         T min_cost = inf;
         std::vector<T> cvec;
         while(k <= K) {
-            double step = 0.1;
+            double step = 1;
             double gamma = 2. / (k + 1);
             //cout<<"test: "<<step / gamma<<' '<<step<<' '<<gamma<<endl;
             nu_minus = nu * (1 - gamma) + lambda * gamma;
@@ -272,10 +291,51 @@ public:
         return barE * res;
     }
 
+    BlockVectorComb ADMMIteration() {
+        int k = 1; // iteration num
+        BlockVector<T, HorizonNum + 1, SizeX + SizeU> barz, res;
+        BlockVector<T, HorizonNum + 1, SizeYx + SizeYu> w, nu;
+        barz.setZero(); w.setZero(); nu.setZero(); 
+        res = barz;
+        T min_cost = inf;
+        std::vector<T> cvec;
+        while(k <= K) {
+            barz = LQR_Solver1(bF - (bET * (w + nu)) * (rho));
+            w = G_Solver(barz, nu, rho);
+            nu = nu + w - bE * barz;
+            k++;
+            T cost = CalculateCost(barz);
+            cvec.push_back(cost);
+            if(!(k % 10)) {
+                if(cost < min_cost) {
+                    res = barz;
+                    min_cost = cost;
+                }
+                cout << "Episodes: " << k << ' ' << cost << endl;
+            }
+        }
+
+        using json = nlohmann::json;
+        json j;
+        json jcost = json::array();
+        for(int i = 0; i < K; ++i) {
+            jcost.push_back(cvec[i]);
+        }
+        j["cost"] = jcost;
+        ofstream out("testori.out");
+        if(out.is_open()) {
+            out << j.dump(4) << endl;
+            out.close();
+        }
+
+        cout << "Final Cost: " << min_cost << endl;
+        return barE * res;
+    }
+
     BlockVector<T, HorizonNum + 1, SizeX + SizeU> solve() {
         PreScaling1();
         ADMMPrework1();
-        BlockVector<T, HorizonNum + 1, SizeX + SizeU> res = ADMMIterationQuick();
+        BlockVector<T, HorizonNum + 1, SizeX + SizeU> res = ADMMIteration();
         return res;
     }
 
