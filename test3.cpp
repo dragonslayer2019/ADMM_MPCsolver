@@ -170,7 +170,7 @@ void solveunit(vector<vector<double>> center, vector<double> dt, vector<double> 
         out.close();
     }
     //res.print("RESULT");
-    return ;
+    return;
 }
 
 int main() {
