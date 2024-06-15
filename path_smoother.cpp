@@ -47,8 +47,11 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
     std::array<VectorX, HorizonNum> c;
     std::array<MatrixHx, HorizonNum + 1> Hx;
     std::array<MatrixU, HorizonNum + 1> Hu;
-    // 状态变量(px, py, pz, vx, vy, vz)
-    // 控制输入(mu1, mu2, mu3)
+
+    std::array<MatrixU, HorizonNum> Rk;
+    std::array<double, HorizonNum+1> Vnorm;
+    // 状态变量(px, py, pz, vx, vy, vz)^T
+    // 控制输入(mu1, mu2, mu3)^T
     // std::array<Eigen::Matrix<double, SizeYx - SizeX, 1>, HorizonNum + 1> new_center;
     VectorX x_init;
     std::array<std::array<FunctionG<double>, SizeYx + SizeYu>, HorizonNum + 1> g;
@@ -66,46 +69,70 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
             //    ,
             //    cos(Theta[i]) / Ella[i], sin(Theta[i]) / Ella[i], 0, 0,
             //    -sin(Theta[i]) / Ellb[i], cos(Theta[i]) / Ellb[i], 0, 0;
-        Hui << 1, 1, 1,
-               1, 1, 1,
-               1, 1, 1;
+        // 此处为一个曲率(mu2^2+mu3^2)约束+一个曲率罚函数
+        Hui << 0, 1, 1,
+               0, 1, 1;
         Hx[i] = Hxi;
         Hu[i] = Hui;
         // new_center[i] << cos(Theta[i]) / Ella[i] * center[i][0] + sin(Theta[i]) / Ella[i] * center[i][1],
         //                  -sin(Theta[i]) / Ellb[i] * center[i][0] + cos(Theta[i]) / Ellb[i] * center[i][1];
     }
+    // 根据采样参考点计算n-1个Rk，Rk第一列单位向量与vk平行，且为正交矩阵
+
+    // 根据Vx， Vy， Vz计算Vnorm[i]
+
     for(int i = 0; i < HorizonNum; ++i) {
-        Ai << 1, 0, dt[i], dt[i] * dt[i] * 0.5,
-              0, 1, 0, 0, 
-              0, 0, 1 ,    dt[i],
-              0, 0, 0 ,    1;
-        Bi << 0,
-              0,
-              dt[i] * dt[i] * 0.5,
-              dt[i];
-        ci << 0, 0.1, 0, 0;
+        // 6*6
+        Ai << 1, 0, 0, dt[i], 0, 0,
+                   0, 1, 0, 0,  dt[i], 0,
+                   0, 0, 1 , 0, 0, dt[i],
+                   0, 0, 0 , 1, 0, 0,
+                   0, 0, 0 , 0, 1, 0,
+                   0, 0, 0 , 0, 0, 1;
+        // 6*3
+        Bi << 0.5*Vnorm[i][i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][0][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
+                   0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][2],
+                   0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][2],
+                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
+                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][2],
+                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][2];
+        // 6*1
+        ci << 0, 0, 0, 0, 0, 0;
         A[i] = Ai; B[i] = Bi; c[i] = ci;
     }
+
     for(int i = 0; i <= HorizonNum; ++i) {
-        Qi << lamb1[i], 0, 0, 0,
-              0, lamb1[i], 0, 0,
-              0, 0, lamb2[i], 0,
-              0, 0, 0, lamb3[i];
-        Ri << lamb4[i];
+        // 追参考位置
+        Qi << lamb1[i], 0, 0, 0, 0, 0,
+                   0, lamb1[i], 0, 0, 0, 0,
+                   0, 0, lamb1[i], 0, 0, 0,
+                   0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0,
+                   0, 0, 0, 0, 0, 0;
         Li << -Px[i] * lamb1[i],
-              0,
-              -Vx[i] * lamb2[i],
-              0;
-        Wi << 0, 0, 0;
+                   -Py[i] * lamb1[i],
+                   -Pz[i] * lamb1[i],
+                   0,
+                   0,
+                   0;
+        // 限制纵向加速度
+        Ri << 0, 0, 0,
+                   0, 0, 0,
+                   0, 0, lamb2[i];
+        Wi << 0,
+                    0, 
+                    0;
         Q[i] = Qi; R[i] = Ri; L[i] = Li; W[i] = Wi;
     }
+
+    // 设置状态变量相关的罚函数形状
     for(int i = 0;i <= 3; ++i) {
         aaa.push_back(0);
         bbb.push_back(0);
         ccc.push_back(0);
         ppp.push_back(0);
     }
-    for(int i = 0; i <= HorizonNum; ++i) {
+    for(int i = 0; i <= HorizonNum; ++i) {s
         g[i][2].AddIndicator(-inf, inf);
         g[i][3]. (Amin[i], Amax[i]);
         
@@ -202,6 +229,7 @@ int main() {
     //2.根据弧长vector与对应的V求解非均衡dt
 
     //3.将采样路点与分段凸走廊匹配，在第i段有m个凸走廊约束就有g[i-1][m-1],让Hxi正确匹配到对应的凸走廊约束
+
 
 
     
