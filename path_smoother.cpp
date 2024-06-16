@@ -37,7 +37,7 @@ std::vector<double> aaa, bbb, ccc;
 std::vector<double> ppp;
 
 // void solveunit3D(vector<vector<double>> center, vector<double> dt, vector<double> px, vector<double> Vx, vector<double> Amin, vector<double> Amax, vector<double> Xsafe1, vector<double> Xsafe2, vector<double> Vlim, vector<double> Vlaw, vector<double> B1, vector<double> Theta, vector<double> Ella, vector<double> Ellb, vector<double> lamb1, vector<double> lamb2, vector<double> lamb3, vector<double> lamb4, vector<double> lamb5, vector<double> lamb6, vector<double> lamb7, vector<double> lamb8, vector<double> lamb9, vector<double> lamb10, int K = 250) {
-void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector<double> Pz, vector<double> Vx, vector<double> Vy, vector<double> Vz, vector<double> lamb1, vector<double> lamb2, vector<double> lamb3, vector<double> lamb4, vector<double> lamb5, int K = 250) {
+void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector<double> Pz, vector<double> Vx, vector<double> Vy, vector<double> Vz, vector<double> lamb1, vector<double> lamb2, vector<double> lamb3, vector<double> lamb4, vector<double> lamb5, vector<vector<Hyperplane>> CorridorP, vector<vector<Ellipsoid>> CorridorE, int K = 250) {
     std::array<MatrixX, HorizonNum + 1> Q;
     std::array<MatrixU, HorizonNum + 1> R;
     std::array<VectorX, HorizonNum + 1> L;
@@ -59,19 +59,20 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
     
     for(int i = 0; i <= HorizonNum; ++i) {
         // 此处为m个切平面约束+一个椭球约束
+        // 计算优化路点到切平面之间的距离有个常数跟着怎么处理
         Hxi << 1, 0, 0, 0, 0, 0,
-               0, 1, 0, 0, 0, 0,
-               0, 0, 1, 0, 0, 0,
-               0, 0, 0, 1, 0, 0;
+                      0, 1, 0, 0, 0, 0,
+                      0, 0, 1, 0, 0, 0,
+                      0, 0, 0, 1, 0, 0;
                // ...m行到切平面距离
                // 1行椭球到圆心约束
         
             //    ,
             //    cos(Theta[i]) / Ella[i], sin(Theta[i]) / Ella[i], 0, 0,
             //    -sin(Theta[i]) / Ellb[i], cos(Theta[i]) / Ellb[i], 0, 0;
-        // 此处为一个曲率(mu2^2+mu3^2)约束+一个曲率罚函数
+        // 此处为一个曲率平方约束+一个曲率罚函数   ck = sqrt(mu2^2+mu3^2)
         Hui << 0, 1, 1,
-               0, 1, 1;
+                      0, 1, 1;
         Hx[i] = Hxi;
         Hu[i] = Hui;
         // new_center[i] << cos(Theta[i]) / Ella[i] * center[i][0] + sin(Theta[i]) / Ella[i] * center[i][1],
@@ -221,6 +222,8 @@ int main() {
     // solve(0.2, 0.2, 2.0, 2.0/3, q, 0.7, 1.2, -0.5, -1.2, 10, 18, 30, 38, st, wei, weig, K);
     vector<double> dt, Px, Vx, Amax, Amin, Vcon, Vlaw, Xsafe1, Xsafe2, B1, Theta, Ella, Ellb, lamb1, lamb2, lamb3, lamb4, lamb5, lamb6, lamb7, lamb8, lamb9, lamb10;
     vector<vector<double>> center;
+    vector<vector<Hyperplane>> CorridorP;//分段切平面约束
+    vector<vector<Ellipsoid>> CorridorE;//分段
 
     //0.获取凸走廊结果，一个二维vector，分段的表示全部切平面约束
     
@@ -285,7 +288,7 @@ int main() {
         //     lamb10.push_back(0);
         // }
     }
-    solveunit3D(center, dt, Px, Vx, Amin, Amax, Xsafe1, Xsafe2, Vcon, Vlaw, B1, Theta, Ella, Ellb, lamb1, lamb2, lamb3, lamb4, lamb5, lamb6, lamb7, lamb8, lamb9, lamb10, K);
+    solveunit3D(center, dt, Px, Vx, Amin, Amax, Xsafe1, Xsafe2, Vcon, Vlaw, B1, Theta, Ella, Ellb, lamb1, lamb2, lamb3, lamb4, lamb5, CorridorP, CorridorE, K);
     gettimeofday(&T2,NULL);
     timeuse = (T2.tv_sec - T1.tv_sec) + (double)(T2.tv_usec - T1.tv_usec)/1000000.0;
     cout<<"time = "<<timeuse<<endl;  //输出时间（单位：ｓ）
