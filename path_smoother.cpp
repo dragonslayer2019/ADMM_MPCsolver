@@ -10,8 +10,9 @@
 
 using namespace std;
 //double shift test
+const int M = 5;// 每段最大切平面数
 const int SizeX = 6, SizeU = 3;
-const int SizeYx = 6, SizeYu = 1;
+const int SizeYx = M + 1, SizeYu = 2;
 const int HorizonNum = 49;
 const double pi = M_PI;
 
@@ -50,6 +51,7 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
 
     std::array<MatrixU, HorizonNum> Rk;
     std::array<double, HorizonNum+1> Vnorm;
+    std::vector<vector<double>> DistC;
     // 状态变量(px, py, pz, vx, vy, vz)^T
     // 控制输入(mu1, mu2, mu3)^T
     // std::array<Eigen::Matrix<double, SizeYx - SizeX, 1>, HorizonNum + 1> new_center;
@@ -59,20 +61,28 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
     
     for(int i = 0; i <= HorizonNum; ++i) {
         // 此处为m个切平面约束+一个椭球约束
-        // 计算优化路点到切平面之间的距离有个常数跟着怎么处理
+        // 计算优化路点到切平面之间距离的结果中的常数转移到gxi函数中
         Hxi << 1, 0, 0, 0, 0, 0,
-                      0, 1, 0, 0, 0, 0,
-                      0, 0, 1, 0, 0, 0,
-                      0, 0, 0, 1, 0, 0;
-               // ...m行到切平面距离
-               // 1行椭球到圆心约束
-        
-            //    ,
-            //    cos(Theta[i]) / Ella[i], sin(Theta[i]) / Ella[i], 0, 0,
-            //    -sin(Theta[i]) / Ellb[i], cos(Theta[i]) / Ellb[i], 0, 0;
+               0, 1, 0, 0, 0, 0,
+               0, 0, 1, 0, 0, 0,
+               0, 0, 0, 1, 0, 0;
+               
+            
+        for (int j = 0; j < M; ++j) {
+            // m行到切平面距离   
+            Hxi << CorridorP[i][j].n().x, CorridorP[i][j].n().y, CorridorP[i][j].n().z, 0, 0, 0;
+            // 计算点到切平面距离中的const向量
+            DistC[i][j] = -CorridorP[i][j].n().x*CorridorP[i][j].p().x - CorridorP[i][j].n().y*CorridorP[i][j].p().y - CorridorP[i][j].n().y*CorridorP[i][j].p().y;
+        }
+        // 1行椭球到圆心约束！！！！！！！！！！！！！！！
+
+        Hxi << 1, 0, 0, 0, 0, 0;
+        //    cos(Theta[i]) / Ella[i], sin(Theta[i]) / Ella[i], 0, 0,
+        //    -sin(Theta[i]) / Ellb[i], cos(Theta[i]) / Ellb[i], 0, 0;
+
         // 此处为一个曲率平方约束+一个曲率罚函数   ck = sqrt(mu2^2+mu3^2)
         Hui << 0, 1, 1,
-                      0, 1, 1;
+               0, 1, 1;
         Hx[i] = Hxi;
         Hu[i] = Hui;
         // new_center[i] << cos(Theta[i]) / Ella[i] * center[i][0] + sin(Theta[i]) / Ella[i] * center[i][1],
@@ -85,18 +95,18 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
     for(int i = 0; i < HorizonNum; ++i) {
         // 6*6
         Ai << 1, 0, 0, dt[i], 0, 0,
-                   0, 1, 0, 0,  dt[i], 0,
-                   0, 0, 1 , 0, 0, dt[i],
-                   0, 0, 0 , 1, 0, 0,
-                   0, 0, 0 , 0, 1, 0,
-                   0, 0, 0 , 0, 0, 1;
+              0, 1, 0, 0,  dt[i], 0,
+              0, 0, 1 , 0, 0, dt[i],
+              0, 0, 0 , 1, 0, 0,
+              0, 0, 0 , 0, 1, 0,
+              0, 0, 0 , 0, 0, 1;
         // 6*3
-        Bi << 0.5*Vnorm[i][i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][0][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
-                   0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][2],
-                   0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][2],
-                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
-                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][2],
-                   Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][2];
+        Bi << 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][0][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
+              0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][1][2],
+              0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][0], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*dt[i]*Rk[i][2][2],
+              Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][0][2],
+              Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][1][2],
+              Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][0], Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][1], 0.5*Vnorm[i]*Vnorm[i]*dt[i]*Rk[i][2][2];
         // 6*1
         ci << 0, 0, 0, 0, 0, 0;
         A[i] = Ai; B[i] = Bi; c[i] = ci;
@@ -105,24 +115,24 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
     for(int i = 0; i <= HorizonNum; ++i) {
         // 追参考位置
         Qi << lamb1[i], 0, 0, 0, 0, 0,
-                   0, lamb1[i], 0, 0, 0, 0,
-                   0, 0, lamb1[i], 0, 0, 0,
-                   0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0,
-                   0, 0, 0, 0, 0, 0;
+              0, lamb1[i], 0, 0, 0, 0,
+              0, 0, lamb1[i], 0, 0, 0,
+              0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0;
         Li << -Px[i] * lamb1[i],
-                   -Py[i] * lamb1[i],
-                   -Pz[i] * lamb1[i],
-                   0,
-                   0,
-                   0;
+              -Py[i] * lamb1[i],
+              -Pz[i] * lamb1[i],
+              0,
+              0,
+              0;
         // 限制纵向加速度
         Ri << 0, 0, 0,
-                   0, 0, 0,
-                   0, 0, lamb2[i];
+              0, 0, 0,
+              0, 0, lamb2[i];
         Wi << 0,
-                    0, 
-                    0;
+              0, 
+              0;
         Q[i] = Qi; R[i] = Ri; L[i] = Li; W[i] = Wi;
     }
 
@@ -133,48 +143,35 @@ void solveunit3D(vector<double> dt, vector<double> Px, vector<double> Py, vector
         ccc.push_back(0);
         ppp.push_back(0);
     }
-    for(int i = 0; i <= HorizonNum; ++i) {s
-        g[i][2].AddIndicator(-inf, inf);
-        g[i][3]. (Amin[i], Amax[i]);
+    for(int i = 0; i <= HorizonNum; ++i) {
+        // 凸走廊切平面罚函数
+        for (int j = 0; j < M; j++) {
+            ppp[0] = -inf;ppp[1] = 0.1;ppp[2] = 1;ppp[3] = inf;
+            aaa[0] = 10;bbb[0] = -22 + 20*DistC[i][j];ccc[0] = 10*DistC[i][j]*DistC[i][j] - 22*DistC[i][j] + 5;
+            aaa[1] = 1;bbb[1] = 2*DistC[i][j] - 2.45;ccc[1] = DistC[i][j]*DistC[i][j] - 2.45*DistC[i][j] + 1.45;
+            aaa[2] = 0;bbb[2] = 0;ccc[2] = 0;
+            g[i][j].AddQuadratic(3, aaa, bbb, ccc, ppp);
+        } 
         
-        double lamb = lamb5[i] / 100 * 0;
-        double Xsafem = (Xsafe1[i] + Xsafe2[i]) / 2;
-        ppp[0] = -inf;
-        aaa[0] = (lamb5[i] + lamb); bbb[0] = (lamb5[i] + lamb) * (-2) * Xsafe1[i]; ccc[0] = (lamb5[i] + lamb) * Xsafe1[i] * Xsafe1[i] + lamb * (Xsafem - Xsafe1[i]) * (Xsafem - Xsafe1[i]);
-        ppp[1] = Xsafe1[i];
-        aaa[1] = lamb; bbb[1] = lamb * (-2) * Xsafem; ccc[1] = lamb * Xsafem * Xsafem; 
-        ppp[2] = Xsafe2[i];
-        aaa[2] = (lamb5[i] + lamb); bbb[2] = (lamb5[i] + lamb) * (-2) * Xsafe2[i]; ccc[2] = (lamb5[i] + lamb) * Xsafe2[i] * Xsafe2[i] + lamb * (Xsafem - Xsafe2[i]) * (Xsafem - Xsafe2[i]);
-        ppp[3] = inf;
-        g[i][0].AddQuadratic(3, aaa, bbb, ccc, ppp);
+        // 凸走廊椭球罚函数
+        ppp[0] = -inf;ppp[1] = 0.5;ppp[2] = 1.0;ppp[3] = inf;
+        aaa[0] = 0; bbb[0] = 0; ccc[0] = 0; 
+        aaa[1] = 1; bbb[1] = 0; ccc[1] = -0.25; 
+        aaa[2] = 10; bbb[2] = 0; ccc[2] = -9.25;
+        g[i][M].AddQuadratic(3, aaa, bbb, ccc, ppp);
 
-        double lim1, lim2, weig1, weig2;
-        if(Vlim[i] < Vlaw[i]) {
-            lim1 = Vlim[i]; lim2 = Vlaw[i];
-            weig1 = lamb6[i]; weig2 = lamb8[i];
-        } else {
-            lim2 = Vlim[i]; lim1 = Vlaw[i];
-            weig2 = lamb6[i]; weig1 = lamb8[i];
-        }
-        aaa[0] = 0; bbb[0] = 0; ccc[0] = 0; ppp[0] = -inf;
-        aaa[1] = weig1; bbb[1] = weig1 * (-2) * lim1; ccc[1] = weig1 * lim1 * lim1; ppp[1] = lim1;
-        aaa[2] = weig1 + weig2;
-        bbb[2] = weig1 * (-2) * lim1 + weig2 * (-2) * lim2;
-        ccc[2] = weig1 * lim1 * lim1 + weig2 * lim2 * lim2;
-        ppp[2] = lim2;
-        ppp[3] = inf;
-        g[i][2].AddQuadratic(3, aaa, bbb, ccc, ppp);
+        // 曲率平方约束
+        ppp[0] = -inf;ppp[1] = 0;ppp[2] = inf;
+        aaa[0] = 0; bbb[0] = 0; ccc[0] = 0;
+        aaa[1] = 1; bbb[1] = 0; ccc[1] = 0;  
+        g[i][M+1].AddQuadratic(2, aaa, bbb, ccc, ppp);
 
-        ppp[0] = -inf;
-        aaa[0] = lamb7[i]; bbb[0] = lamb7[i] * (-2) * B1[i]; ccc[0] = lamb7[i] * B1[i] * B1[i];
-        aaa[1] = 0; bbb[1] = 0; ccc[1] = 0; ppp[1] = B1[i]; ppp[2] = inf;
-        g[i][3].AddQuadratic(2, aaa, bbb, ccc, ppp);
-
-        ppp[0] = 0;
-        aaa[0] = 0; bbb[0] = 0; ccc[0] = 0; ppp[1] = 0.5;
-        aaa[1] = lamb9[i]; bbb[1] = 0; ccc[1] = (0 - lamb9[i]) * 0.25; ppp[2] = 0.8;
-        aaa[2] = lamb10[i]; bbb[2] = 0; ccc[2] = (lamb9[i] - lamb10[i]) * 0.64 + (0 - lamb9[i]) * 0.25; ppp[3] = inf;
-        g[i][4].AddQuadratic(3, aaa, bbb, ccc, ppp);
+        // 曲率罚函数
+        ppp[0] = -inf;ppp[1] = 0.5;ppp[2] = 2.0;ppp[3] = inf;
+        aaa[0] = 0; bbb[0] = 0; ccc[0] = 0; 
+        aaa[1] = 1; bbb[1] = 0; ccc[1] = -0.25; 
+        aaa[2] = 10; bbb[2] = 0; ccc[2] = -36.25;
+        g[i][M+2].AddQuadratic(3, aaa, bbb, ccc, ppp);
     }
 
 
@@ -231,7 +228,7 @@ int main() {
 
     //2.根据弧长vector与对应的V求解非均衡dt
 
-    //3.将采样路点与分段凸走廊匹配，在第i段有m个凸走廊约束就有g[i-1][m-1],让Hxi正确匹配到对应的凸走廊约束
+    //3.将采样路点与分段凸走廊匹配，horizon num + 1个点对应horizon num + 1个凸走廊，在第i段有m个凸走廊约束,让Hxi正确匹配到对应的凸走廊约束
 
 
 
